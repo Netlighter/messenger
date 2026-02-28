@@ -255,21 +255,30 @@ function App() {
     React.createElement(
       'section',
       { className: 'chat' },
-      React.createElement('header', null, React.createElement('h2', null, 'Общий чат'), React.createElement('span', null, `${users.length} онлайн`)),
+      React.createElement(
+        'header',
+        { className: 'chat-head' },
+        React.createElement('h2', null, 'Общий чат'),
+        React.createElement('span', { className: 'chat-counter' }, `${users.length} онлайн`)
+      ),
       error ? React.createElement('p', { className: 'error' }, error) : null,
       React.createElement(
         'div',
-        { className: 'messages' },
-        messages.map((msg) =>
-          React.createElement(
-            'article',
-            { key: msg.id, className: msg.nickname === me.nickname ? 'mine' : '' },
-            React.createElement('img', { className: 'avatar xs', src: msg.avatar || '/avatar-placeholder.svg', alt: msg.nickname }),
+        { className: 'messages-wrap' },
+        React.createElement(
+          'div',
+          { className: 'messages' },
+          messages.map((msg) =>
             React.createElement(
-              'div',
-              { className: 'bubble' },
-              React.createElement('div', { className: 'meta' }, React.createElement('strong', null, msg.nickname), React.createElement('time', null, formatTime(msg.createdAt))),
-              React.createElement('p', null, msg.text)
+              'article',
+              { key: msg.id, className: msg.nickname === me.nickname ? 'mine' : '' },
+              React.createElement('img', { className: 'avatar xs', src: msg.avatar || '/avatar-placeholder.svg', alt: msg.nickname }),
+              React.createElement(
+                'div',
+                { className: 'bubble' },
+                React.createElement('div', { className: 'meta' }, React.createElement('strong', null, msg.nickname), React.createElement('time', null, formatTime(msg.createdAt))),
+                React.createElement('p', null, msg.text)
+              )
             )
           )
         )
@@ -277,18 +286,22 @@ function App() {
       React.createElement(
         'form',
         { className: 'composer', onSubmit: sendMessage },
-        React.createElement('textarea', {
-          value: text,
-          rows: 2,
-          maxLength: 700,
-          placeholder: 'Напиши сообщение...',
-          onChange: (e) => setText(e.target.value),
-          onInput: (e) => {
-            e.target.style.height = 'auto';
-            e.target.style.height = `${Math.min(e.target.scrollHeight, 220)}px`;
-          }
-        }),
-        React.createElement('button', { className: 'primary', type: 'submit', disabled: !text.trim() }, 'Отправить')
+        React.createElement(
+          'div',
+          { className: 'composer-input-wrap' },
+          React.createElement('textarea', {
+            value: text,
+            rows: 2,
+            maxLength: 700,
+            placeholder: 'Напиши сообщение...',
+            onChange: (e) => setText(e.target.value),
+            onInput: (e) => {
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 220)}px`;
+            }
+          })
+        ),
+        React.createElement('button', { className: 'primary send-btn', type: 'submit', disabled: !text.trim() }, 'Отправить')
       )
     )
   );
