@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'https://esm.sh/react@18.3.1';
+import React, { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@18.3.1';
 import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
 
 const TOKEN_KEY = 'messenger_token';
@@ -25,9 +25,7 @@ function formatTime(ts) {
 function nicknameInitials(nickname) {
   const words = String(nickname || '').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return '??';
-  if (words.length === 1) {
-    return words[0].slice(0, 2).toUpperCase();
-  }
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   const first = words[0][0] || '';
   const secondWord = words[1] || '';
   const second = secondWord[1] || secondWord[0] || '';
@@ -37,16 +35,12 @@ function nicknameInitials(nickname) {
 function avatarColor(nickname) {
   const input = String(nickname || '');
   let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
+  for (let i = 0; i < input.length; i += 1) hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[hash % AVATAR_COLORS.length];
 }
 
 function Avatar({ user, size = 'xs' }) {
-  if (user.avatar) {
-    return React.createElement('img', { className: `avatar ${size}`, src: user.avatar, alt: user.nickname });
-  }
+  if (user.avatar) return React.createElement('img', { className: `avatar ${size}`, src: user.avatar, alt: user.nickname });
   return React.createElement(
     'div',
     {
@@ -100,32 +94,14 @@ function AuthScreen({ onAuth }) {
       React.createElement(
         'div',
         { className: 'tabs' },
-        React.createElement(
-          'button',
-          { className: mode === 'login' ? 'tab active' : 'tab', type: 'button', onClick: () => setMode('login') },
-          'Логин'
-        ),
-        React.createElement(
-          'button',
-          { className: mode === 'register' ? 'tab active' : 'tab', type: 'button', onClick: () => setMode('register') },
-          'Регистрация'
-        )
+        React.createElement('button', { className: mode === 'login' ? 'tab active' : 'tab', type: 'button', onClick: () => setMode('login') }, 'Логин'),
+        React.createElement('button', { className: mode === 'register' ? 'tab active' : 'tab', type: 'button', onClick: () => setMode('register') }, 'Регистрация')
       ),
       React.createElement(
         'form',
         { className: 'stack', onSubmit: submit },
-        React.createElement('input', {
-          placeholder: 'Ник (минимум 3 символа)',
-          value: nickname,
-          maxLength: 32,
-          onChange: (e) => setNickname(e.target.value)
-        }),
-        React.createElement('input', {
-          type: 'password',
-          placeholder: 'Пароль (минимум 6 символов)',
-          value: password,
-          onChange: (e) => setPassword(e.target.value)
-        }),
+        React.createElement('input', { placeholder: 'Ник (минимум 3 символа)', value: nickname, maxLength: 32, onChange: (e) => setNickname(e.target.value) }),
+        React.createElement('input', { type: 'password', placeholder: 'Пароль (минимум 6 символов)', value: password, onChange: (e) => setPassword(e.target.value) }),
         React.createElement('button', { type: 'submit', className: 'primary' }, mode === 'login' ? 'Войти' : 'Зарегистрироваться'),
         error ? React.createElement('p', { className: 'error' }, error) : null
       )
@@ -140,6 +116,28 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const messagesRef = useRef(null);
+  const stickToBottomRef = useRef(true);
+
+  const checkScrollPosition = () => {
+    const node = messagesRef.current;
+    if (!node) return;
+    const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    const nearBottom = distanceToBottom < 80;
+    stickToBottomRef.current = nearBottom;
+    setShowScrollButton(!nearBottom);
+  };
+
+  const scrollToBottom = (force = false) => {
+    const node = messagesRef.current;
+    if (!node) return;
+    if (force || stickToBottomRef.current) {
+      node.scrollTop = node.scrollHeight;
+      stickToBottomRef.current = true;
+      setShowScrollButton(false);
+    }
+  };
 
   const loadState = async () => {
     try {
@@ -180,10 +178,15 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
   const authenticated = useMemo(() => Boolean(localStorage.getItem(TOKEN_KEY) && me), [me]);
 
   const onAuth = async () => {
     await loadState();
+    setTimeout(() => scrollToBottom(true), 0);
     const schedule = async () => {
       await loadState();
       if (localStorage.getItem(TOKEN_KEY)) setTimeout(schedule, 1800);
@@ -195,11 +198,9 @@ function App() {
     event.preventDefault();
     if (!text.trim()) return;
     try {
-      await api('/api/message', {
-        method: 'POST',
-        body: JSON.stringify({ text: text.trim() })
-      });
+      await api('/api/message', { method: 'POST', body: JSON.stringify({ text: text.trim() }) });
       setText('');
+      stickToBottomRef.current = true;
       await loadState();
     } catch (e) {
       setError(e.message);
@@ -224,10 +225,7 @@ function App() {
     if (!file) return;
     try {
       const avatar = await fileToDataUrl(file);
-      await api('/api/avatar', {
-        method: 'POST',
-        body: JSON.stringify({ avatar })
-      });
+      await api('/api/avatar', { method: 'POST', body: JSON.stringify({ avatar }) });
       await loadState();
     } catch (e) {
       setError(e.message);
@@ -245,7 +243,12 @@ function App() {
   return React.createElement(
     'main',
     { className: 'layout' },
-    React.createElement('header', { className: 'app-header' }, React.createElement('h1', null, 'SyChat')),
+    React.createElement(
+      'header',
+      { className: 'app-header' },
+      React.createElement('div', { className: 'brand-mark', 'aria-hidden': true }, '✦'),
+      React.createElement('h1', null, 'SyChat')
+    ),
     React.createElement(
       'aside',
       { className: 'sidebar' },
@@ -295,14 +298,19 @@ function App() {
     React.createElement(
       'section',
       { className: 'chat' },
-      React.createElement('header', { className: 'chat-head' }, React.createElement('h2', null, 'Общий чат'), React.createElement('span', { className: 'chat-counter' }, `${onlineUsers.length} онлайн`)),
+      React.createElement(
+        'header',
+        { className: 'chat-head' },
+        React.createElement('h2', null, 'Общий чат'),
+        React.createElement('span', { className: 'chat-counter' }, `${onlineUsers.length} онлайн`)
+      ),
       error ? React.createElement('p', { className: 'error' }, error) : null,
       React.createElement(
         'div',
         { className: 'messages-wrap' },
         React.createElement(
           'div',
-          { className: 'messages' },
+          { className: 'messages', ref: messagesRef, onScroll: checkScrollPosition },
           messages.map((msg) =>
             React.createElement(
               'article',
@@ -317,16 +325,13 @@ function App() {
             )
           )
         ),
+        showScrollButton
+          ? React.createElement('button', { type: 'button', className: 'scroll-bottom-btn', onClick: () => scrollToBottom(true), title: 'Пролистать чат до конца', 'aria-label': 'Пролистать чат до конца' }, '↓')
+          : null,
         React.createElement(
           'form',
           { className: 'composer floating', onSubmit: sendMessage },
-          React.createElement('textarea', {
-            value: text,
-            rows: 2,
-            maxLength: 700,
-            placeholder: 'Напиши сообщение...',
-            onChange: (e) => setText(e.target.value)
-          }),
+          React.createElement('textarea', { value: text, rows: 2, maxLength: 700, placeholder: 'Напиши сообщение...', onChange: (e) => setText(e.target.value) }),
           React.createElement('button', { className: 'primary send-btn', type: 'submit', disabled: !text.trim() }, 'Отправить')
         )
       )
