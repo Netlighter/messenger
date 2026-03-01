@@ -133,19 +133,29 @@ def get_session_user(conn: sqlite3.Connection, token: str | None):
     return row
 
 
-def list_online_users(conn: sqlite3.Connection):
+def list_users_with_status(conn: sqlite3.Connection):
     threshold = now_ts() - ONLINE_TTL_SECONDS
     rows = conn.execute(
         """
-        SELECT DISTINCT u.nickname, u.avatar_data_url
-        FROM sessions s
-        JOIN users u ON u.id = s.user_id
-        WHERE s.last_seen >= ? AND s.expires_at >= ?
-        ORDER BY u.nickname COLLATE NOCASE
+        SELECT
+            u.nickname,
+            u.avatar_data_url,
+            MAX(CASE WHEN s.last_seen >= ? AND s.expires_at >= ? THEN 1 ELSE 0 END) AS online
+        FROM users u
+        LEFT JOIN sessions s ON s.user_id = u.id
+        GROUP BY u.id
+        ORDER BY online DESC, u.nickname COLLATE NOCASE
         """,
         (threshold, now_ts()),
     ).fetchall()
-    return [{"nickname": r["nickname"], "avatar": r["avatar_data_url"]} for r in rows]
+    return [
+        {
+            "nickname": r["nickname"],
+            "avatar": r["avatar_data_url"],
+            "online": bool(r["online"]),
+        }
+        for r in rows
+    ]
 
 
 def list_messages(conn: sqlite3.Connection, limit: int = 150):
@@ -221,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
                         "nickname": user["nickname"],
                         "avatar": user["avatar_data_url"],
                     },
-                    "users": list_online_users(conn),
+                    "users": list_users_with_status(conn),
                     "messages": list_messages(conn),
                 }
                 conn.commit()
