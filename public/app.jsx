@@ -11,7 +11,6 @@ async function api(path, options = {}) {
     ...(options.headers || {})
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-
   const response = await fetch(path, { ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'Request failed');
@@ -40,16 +39,9 @@ function avatarColor(nickname) {
 }
 
 function Avatar({ user, size = 'xs' }) {
-  if (user.avatar) {
-    return <img className={`avatar ${size}`} src={user.avatar} alt={user.nickname} />;
-  }
+  if (user.avatar) return <img className={`avatar ${size}`} src={user.avatar} alt={user.nickname} />;
   return (
-    <div
-      className={`avatar ${size} avatar-fallback`}
-      style={{ backgroundColor: avatarColor(user.nickname) }}
-      aria-label={user.nickname}
-      title={user.nickname}
-    >
+    <div className={`avatar ${size} avatar-fallback`} style={{ backgroundColor: avatarColor(user.nickname) }} aria-label={user.nickname} title={user.nickname}>
       {nicknameInitials(user.nickname)}
     </div>
   );
@@ -91,29 +83,13 @@ function AuthScreen({ onAuth }) {
         <h1>SyChat</h1>
         <p>Регистрируйся по нику и паролю или входи в существующий аккаунт.</p>
         <div className="tabs">
-          <button className={mode === 'login' ? 'tab active' : 'tab'} type="button" onClick={() => setMode('login')}>
-            Логин
-          </button>
-          <button className={mode === 'register' ? 'tab active' : 'tab'} type="button" onClick={() => setMode('register')}>
-            Регистрация
-          </button>
+          <button className={mode === 'login' ? 'tab active' : 'tab'} type="button" onClick={() => setMode('login')}>Логин</button>
+          <button className={mode === 'register' ? 'tab active' : 'tab'} type="button" onClick={() => setMode('register')}>Регистрация</button>
         </div>
         <form className="stack" onSubmit={submit}>
-          <input
-            placeholder="Ник (минимум 3 символа)"
-            value={nickname}
-            maxLength={32}
-            onChange={(e) => setNickname(e.target.value)}
-          />
-          <input
-            type="password"
-            placeholder="Пароль (минимум 6 символов)"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <button type="submit" className="primary">
-            {mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
-          </button>
+          <input placeholder="Ник (минимум 3 символа)" value={nickname} maxLength={32} onChange={(e) => setNickname(e.target.value)} />
+          <input type="password" placeholder="Пароль (минимум 6 символов)" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button type="submit" className="primary">{mode === 'login' ? 'Войти' : 'Зарегистрироваться'}</button>
           {error ? <p className="error">{error}</p> : null}
         </form>
       </section>
@@ -126,18 +102,36 @@ function App() {
   const [me, setMe] = useState(null);
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [pendingMessages, setPendingMessages] = useState([]);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
+  const [attachments, setAttachments] = useState([]);
+  const [previewImage, setPreviewImage] = useState('');
   const messagesRef = useRef(null);
+  const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
   const stickToBottomRef = useRef(true);
+
+  const allMessages = useMemo(() => {
+    const merged = [...messages, ...pendingMessages];
+    merged.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    return merged;
+  }, [messages, pendingMessages]);
+
+  const resetTextareaHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 56), 170)}px`;
+  };
 
   const checkScrollPosition = () => {
     const node = messagesRef.current;
     if (!node) return;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    const nearBottom = distanceToBottom < 80;
+    const nearBottom = distanceToBottom < 90;
     stickToBottomRef.current = nearBottom;
     setShowScrollButton(!nearBottom);
   };
@@ -194,31 +188,85 @@ function App() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [allMessages]);
+
+  useEffect(() => {
+    resetTextareaHeight();
+  }, [text, attachments.length]);
 
   const authenticated = useMemo(() => Boolean(localStorage.getItem(TOKEN_KEY) && me), [me]);
 
   const onAuth = async () => {
     await loadState();
     setTimeout(() => scrollToBottom(true), 0);
-
     const schedule = async () => {
       await loadState();
       if (localStorage.getItem(TOKEN_KEY)) setTimeout(schedule, 1800);
     };
-
     setTimeout(schedule, 1800);
+  };
+
+  const addAttachmentDataUrls = (dataUrls) => {
+    setAttachments((prev) => {
+      const existing = new Set(prev.map((i) => i.dataUrl));
+      const next = [...prev];
+      for (const dataUrl of dataUrls) {
+        if (!existing.has(dataUrl) && next.length < 6) {
+          next.push({ id: crypto.randomUUID(), dataUrl });
+          existing.add(dataUrl);
+        }
+      }
+      return next;
+    });
+  };
+
+  const handlePickFiles = async (event) => {
+    const files = [...(event.target.files || [])].filter((f) => f.type.startsWith('image/'));
+    const converted = await Promise.all(files.map((f) => fileToDataUrl(f).catch(() => null)));
+    addAttachmentDataUrls(converted.filter(Boolean));
+    event.target.value = '';
+  };
+
+  const handlePaste = async (event) => {
+    const items = [...(event.clipboardData?.items || [])].filter((i) => i.type.startsWith('image/'));
+    if (!items.length) return;
+    event.preventDefault();
+    const files = items.map((i) => i.getAsFile()).filter(Boolean);
+    const converted = await Promise.all(files.map((f) => fileToDataUrl(f).catch(() => null)));
+    addAttachmentDataUrls(converted.filter(Boolean));
   };
 
   const sendMessage = async (event) => {
     event.preventDefault();
-    if (!text.trim()) return;
+    const cleanText = text.trim();
+    const outgoingAttachments = attachments.map((a) => a.dataUrl);
+    if (!cleanText && !outgoingAttachments.length) return;
+
+    const tempId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const optimistic = {
+      id: tempId,
+      nickname: me.nickname,
+      avatar: me.avatar,
+      text: cleanText,
+      attachments: outgoingAttachments,
+      createdAt: Date.now(),
+      pending: true
+    };
+
+    setPendingMessages((prev) => [...prev, optimistic]);
+    setText('');
+    setAttachments([]);
+    stickToBottomRef.current = true;
+
     try {
-      await api('/api/message', { method: 'POST', body: JSON.stringify({ text: text.trim() }) });
-      setText('');
-      stickToBottomRef.current = true;
+      await api('/api/message', {
+        method: 'POST',
+        body: JSON.stringify({ text: cleanText, attachments: outgoingAttachments })
+      });
+      setPendingMessages((prev) => prev.filter((m) => m.id !== tempId));
       await loadState();
     } catch (e) {
+      setPendingMessages((prev) => prev.filter((m) => m.id !== tempId));
       setError(e.message);
     }
   };
@@ -233,6 +281,7 @@ function App() {
     setMe(null);
     setUsers([]);
     setMessages([]);
+    setPendingMessages([]);
     setReady(true);
   };
 
@@ -252,6 +301,13 @@ function App() {
 
   const onlineUsers = users.filter((u) => u.online);
   const offlineUsers = users.filter((u) => !u.online);
+  const othersOnline = onlineUsers.some((u) => u.nickname !== me?.nickname);
+
+  const statusSymbol = (msg) => {
+    if (msg.pending) return '🕓';
+    if (othersOnline) return '✓✓';
+    return '✓';
+  };
 
   if (!ready) return <main className="auth-screen"><p>Загрузка...</p></main>;
   if (!authenticated) return <AuthScreen onAuth={onAuth} />;
@@ -270,95 +326,100 @@ function App() {
       </nav>
 
       <aside className={activeTab === 'chat' ? 'sidebar mobile-hidden' : 'sidebar'}>
-        <div className={activeTab === "profile" ? "user-sections mobile-hidden" : "user-sections"}>
+        <div className={activeTab === 'profile' ? 'user-sections mobile-hidden' : 'user-sections'}>
           <h2>Участники</h2>
           <p className="sidebar-caption">{onlineUsers.length} онлайн • {offlineUsers.length} офлайн</p>
-
           <h3 className="section-title">Онлайн</h3>
           <ul className="users">
             {onlineUsers.map((user) => (
-              <li className="user-card" key={user.nickname}>
-                <span className="presence-dot online" />
-                <Avatar user={user} />
-                <span className="nickname">{user.nickname}</span>
-              </li>
+              <li className="user-card" key={user.nickname}><span className="presence-dot online" /><Avatar user={user} /><span className="nickname">{user.nickname}</span></li>
             ))}
           </ul>
-
           <h3 className="section-title">Офлайн</h3>
           <ul className="users">
             {offlineUsers.map((user) => (
-              <li className="user-card" key={user.nickname}>
-                <span className="presence-dot offline" />
-                <Avatar user={user} />
-                <span className="nickname">{user.nickname}</span>
-              </li>
+              <li className="user-card" key={user.nickname}><span className="presence-dot offline" /><Avatar user={user} /><span className="nickname">{user.nickname}</span></li>
             ))}
           </ul>
         </div>
 
-        <div className={activeTab === "participants" ? "profile mobile-hidden" : "profile"}>
+        <div className={activeTab === 'participants' ? 'profile mobile-hidden' : 'profile'}>
           <Avatar user={me} size="lg" />
-          <div>
-            <strong>{me.nickname}</strong>
-            <p>Твой профиль</p>
-          </div>
-          <label className="upload">
-            Сменить фото
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadAvatar} />
-          </label>
+          <div className="profile-meta"><strong>{me.nickname}</strong><p>Твой профиль</p></div>
+          <label className="upload">Сменить фото<input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadAvatar} /></label>
           <button className="danger logout-btn" type="button" onClick={logout}>Выйти</button>
         </div>
       </aside>
 
-      <section className={activeTab === "chat" ? "chat" : "chat mobile-hidden"}>
-        <header className="chat-head">
-          <h2>Общий чат</h2>
-          <span className="chat-counter">{onlineUsers.length} онлайн</span>
-        </header>
-
+      <section className={activeTab === 'chat' ? 'chat' : 'chat mobile-hidden'}>
+        <header className="chat-head"><h2>Общий чат</h2><span className="chat-counter">{onlineUsers.length} онлайн</span></header>
         {error ? <p className="error">{error}</p> : null}
 
         <div className="messages-wrap">
           <div className="messages" ref={messagesRef} onScroll={checkScrollPosition}>
-            {messages.map((msg) => (
+            {allMessages.map((msg) => (
               <article key={msg.id} className={msg.nickname === me.nickname ? 'mine' : ''}>
                 <Avatar user={msg} />
                 <div className="bubble">
                   <div className="meta">
                     <strong>{msg.nickname}</strong>
                     <time>{formatTime(msg.createdAt)}</time>
+                    {msg.nickname === me.nickname ? <span className="delivery-status">{statusSymbol(msg)}</span> : null}
                   </div>
-                  <p>{msg.text}</p>
+                  {msg.text ? <p>{msg.text}</p> : null}
+                  {Array.isArray(msg.attachments) && msg.attachments.length ? (
+                    <div className="message-attachments">
+                      {msg.attachments.map((image, index) => (
+                        <button type="button" key={`${msg.id}_${index}`} className="message-image-btn" onClick={() => setPreviewImage(image)}>
+                          <img src={image} alt="attachment" className="message-image" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </article>
             ))}
           </div>
 
-          {showScrollButton ? (
-            <button
-              type="button"
-              className="scroll-bottom-btn"
-              onClick={() => scrollToBottom(true)}
-              title="Пролистать чат до конца"
-              aria-label="Пролистать чат до конца"
-            >
-              ↓
-            </button>
+          {showScrollButton ? <button type="button" className="scroll-bottom-btn" onClick={() => scrollToBottom(true)} title="Пролистать чат до конца" aria-label="Пролистать чат до конца">↓</button> : null}
+        </div>
+
+        <form className="composer" onSubmit={sendMessage}>
+          {attachments.length ? (
+            <div className="attachment-previews">
+              {attachments.map((item) => (
+                <div key={item.id} className="attachment-preview">
+                  <img src={item.dataUrl} alt="preview" />
+                  <button type="button" className="attachment-remove" onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== item.id))}>×</button>
+                </div>
+              ))}
+            </div>
           ) : null}
 
-          <form className="composer floating" onSubmit={sendMessage}>
+          <div className="composer-row">
+            <button type="button" className="clip-btn" onClick={() => fileInputRef.current?.click()} aria-label="Прикрепить файл">📎</button>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden-file-input" onChange={handlePickFiles} />
             <textarea
+              ref={textareaRef}
               value={text}
               rows={2}
               maxLength={700}
               placeholder="Напиши сообщение..."
               onChange={(e) => setText(e.target.value)}
+              onInput={resetTextareaHeight}
+              onPaste={handlePaste}
             />
-            <button className="primary send-btn" type="submit" disabled={!text.trim()}>Отправить</button>
-          </form>
-        </div>
+            <button className="primary send-btn" type="submit" disabled={!text.trim() && !attachments.length}>Отправить</button>
+          </div>
+        </form>
       </section>
+
+      {previewImage ? (
+        <div className="image-modal" role="dialog" aria-modal="true">
+          <button type="button" className="image-modal-close" onClick={() => setPreviewImage('')} aria-label="Закрыть">×</button>
+          <img src={previewImage} alt="full size" className="image-modal-content" />
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -1,5 +1,4 @@
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 import base64
 import hashlib
@@ -13,7 +12,9 @@ ROOT = Path(__file__).parent / "public"
 DB_PATH = Path(__file__).parent / "messenger.db"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 ONLINE_TTL_SECONDS = 60 * 3
-MAX_AVATAR_SIZE = 1024 * 1024  # 1MB in base64 payload body
+MAX_AVATAR_SIZE = 1024 * 1024
+MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024
+MAX_ATTACHMENTS = 6
 
 
 def now_ts() -> int:
@@ -53,11 +54,17 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                attachments_json TEXT NOT NULL DEFAULT '[]',
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
             """
         )
+
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "attachments_json" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
 
 
 def hash_password(password: str, salt: str) -> str:
@@ -77,24 +84,42 @@ def sanitize_text(raw: str) -> str:
     return str(raw or "").strip()[:700]
 
 
-def sanitize_avatar_data_url(data_url: str | None) -> str | None:
+def sanitize_image_data_url(data_url: str | None, max_size: int) -> str | None:
     if not data_url:
         return None
     data_url = str(data_url)
-    if len(data_url) > MAX_AVATAR_SIZE * 2:
+    if len(data_url) > max_size * 2:
         return None
     if not data_url.startswith("data:image/") or ";base64," not in data_url:
         return None
     header, b64 = data_url.split(",", 1)
-    if not (header.startswith("data:image/png") or header.startswith("data:image/jpeg") or header.startswith("data:image/webp")):
+    if not (header.startswith("data:image/png") or header.startswith("data:image/jpeg") or header.startswith("data:image/webp") or header.startswith("data:image/gif")):
         return None
     try:
         decoded = base64.b64decode(b64, validate=True)
     except Exception:
         return None
-    if len(decoded) > MAX_AVATAR_SIZE:
+    if len(decoded) > max_size:
         return None
     return data_url
+
+
+def sanitize_avatar_data_url(data_url: str | None) -> str | None:
+    return sanitize_image_data_url(data_url, MAX_AVATAR_SIZE)
+
+
+def sanitize_attachments(raw) -> list[str] | None:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return None
+    cleaned: list[str] = []
+    for item in raw[:MAX_ATTACHMENTS]:
+        val = sanitize_image_data_url(item, MAX_ATTACHMENT_SIZE)
+        if not val:
+            return None
+        cleaned.append(val)
+    return cleaned
 
 
 def create_session(conn: sqlite3.Connection, user_id: int) -> str:
@@ -161,7 +186,7 @@ def list_users_with_status(conn: sqlite3.Connection):
 def list_messages(conn: sqlite3.Connection, limit: int = 150):
     rows = conn.execute(
         """
-        SELECT m.id, m.text, m.created_at, u.nickname, u.avatar_data_url
+        SELECT m.id, m.text, m.attachments_json, m.created_at, u.nickname, u.avatar_data_url
         FROM messages m
         JOIN users u ON u.id = m.user_id
         ORDER BY m.id DESC
@@ -170,20 +195,29 @@ def list_messages(conn: sqlite3.Connection, limit: int = 150):
         (limit,),
     ).fetchall()
     rows.reverse()
-    return [
-        {
-            "id": r["id"],
-            "text": r["text"],
-            "createdAt": r["created_at"],
-            "nickname": r["nickname"],
-            "avatar": r["avatar_data_url"],
-        }
-        for r in rows
-    ]
+    payload = []
+    for r in rows:
+        try:
+            attachments = json.loads(r["attachments_json"] or "[]")
+        except Exception:
+            attachments = []
+        if not isinstance(attachments, list):
+            attachments = []
+        payload.append(
+            {
+                "id": r["id"],
+                "text": r["text"],
+                "createdAt": r["created_at"],
+                "nickname": r["nickname"],
+                "avatar": r["avatar_data_url"],
+                "attachments": attachments[:MAX_ATTACHMENTS],
+            }
+        )
+    return payload
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "MessengerServer/2.0"
+    server_version = "MessengerServer/2.1"
 
     def _json(self, status: int, payload):
         data = json.dumps(payload).encode("utf-8")
@@ -323,15 +357,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/message":
             data = self._read_json()
             text = sanitize_text(data.get("text", ""))
-            if not text:
+            attachments = sanitize_attachments(data.get("attachments"))
+            if attachments is None:
+                return self._json(400, {"error": "invalid attachments"})
+            if not text and not attachments:
                 return self._json(400, {"error": "empty message"})
             with connect_db() as conn:
                 user = get_session_user(conn, self._bearer_token())
                 if not user:
                     return self._json(401, {"error": "unauthorized"})
                 conn.execute(
-                    "INSERT INTO messages(user_id, text, created_at) VALUES (?, ?, ?)",
-                    (user["id"], text, now_ts() * 1000),
+                    "INSERT INTO messages(user_id, text, attachments_json, created_at) VALUES (?, ?, ?, ?)",
+                    (user["id"], text, json.dumps(attachments, ensure_ascii=False), now_ts() * 1000),
                 )
                 conn.commit()
                 return self._json(200, {"ok": True})
