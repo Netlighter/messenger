@@ -56,6 +56,13 @@ async function fileToDataUrl(file) {
   });
 }
 
+
+function makeLocalId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState('login');
   const [nickname, setNickname] = useState('');
@@ -191,6 +198,12 @@ function App() {
   }, [allMessages]);
 
   useEffect(() => {
+    const latest = messages.length ? messages[messages.length - 1] : null;
+    if (!latest || !latest.id) return;
+    api('/api/read', { method: 'POST', body: JSON.stringify({ messageId: latest.id }) }).catch(() => {});
+  }, [messages]);
+
+  useEffect(() => {
     resetTextareaHeight();
   }, [text, attachments.length]);
 
@@ -212,7 +225,7 @@ function App() {
       const next = [...prev];
       for (const dataUrl of dataUrls) {
         if (!existing.has(dataUrl) && next.length < 6) {
-          next.push({ id: crypto.randomUUID(), dataUrl });
+          next.push({ id: makeLocalId(), dataUrl });
           existing.add(dataUrl);
         }
       }
@@ -301,11 +314,9 @@ function App() {
 
   const onlineUsers = users.filter((u) => u.online);
   const offlineUsers = users.filter((u) => !u.online);
-  const othersOnline = onlineUsers.some((u) => u.nickname !== me?.nickname);
-
   const statusSymbol = (msg) => {
     if (msg.pending) return '🕓';
-    if (othersOnline) return '✓✓';
+    if ((msg.readByCount || 0) > 0) return '✓✓';
     return '✓';
   };
 

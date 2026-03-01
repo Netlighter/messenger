@@ -58,6 +58,13 @@ def init_db() -> None:
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS message_reads (
+                user_id INTEGER PRIMARY KEY,
+                last_read_message_id INTEGER NOT NULL DEFAULT 0,
+                read_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
 
@@ -183,10 +190,10 @@ def list_users_with_status(conn: sqlite3.Connection):
     ]
 
 
-def list_messages(conn: sqlite3.Connection, limit: int = 150):
+def list_messages(conn: sqlite3.Connection, viewer_user_id: int, limit: int = 150):
     rows = conn.execute(
         """
-        SELECT m.id, m.text, m.attachments_json, m.created_at, u.nickname, u.avatar_data_url
+        SELECT m.id, m.user_id, m.text, m.attachments_json, m.created_at, u.nickname, u.avatar_data_url
         FROM messages m
         JOIN users u ON u.id = m.user_id
         ORDER BY m.id DESC
@@ -211,6 +218,10 @@ def list_messages(conn: sqlite3.Connection, limit: int = 150):
                 "nickname": r["nickname"],
                 "avatar": r["avatar_data_url"],
                 "attachments": attachments[:MAX_ATTACHMENTS],
+                "readByCount": int(conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM message_reads WHERE user_id != ? AND last_read_message_id >= ?",
+                    (viewer_user_id, r["id"]),
+                ).fetchone()["cnt"]),
             }
         )
     return payload
@@ -266,7 +277,7 @@ class Handler(BaseHTTPRequestHandler):
                         "avatar": user["avatar_data_url"],
                     },
                     "users": list_users_with_status(conn),
-                    "messages": list_messages(conn),
+                    "messages": list_messages(conn, user["id"]),
                 }
                 conn.commit()
                 return self._json(200, payload)
@@ -353,6 +364,36 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("UPDATE users SET avatar_data_url = ? WHERE id = ?", (avatar, user["id"]))
                 conn.commit()
                 return self._json(200, {"ok": True, "avatar": avatar})
+
+        if self.path == "/api/read":
+            data = self._read_json()
+            try:
+                message_id = int(data.get("messageId", 0))
+            except Exception:
+                message_id = 0
+            if message_id < 0:
+                message_id = 0
+            with connect_db() as conn:
+                user = get_session_user(conn, self._bearer_token())
+                if not user:
+                    return self._json(401, {"error": "unauthorized"})
+                current = conn.execute(
+                    "SELECT last_read_message_id FROM message_reads WHERE user_id = ?",
+                    (user["id"],),
+                ).fetchone()
+                prev = int(current["last_read_message_id"]) if current else 0
+                next_id = max(prev, message_id)
+                conn.execute(
+                    """
+                    INSERT INTO message_reads(user_id, last_read_message_id, read_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id)
+                    DO UPDATE SET last_read_message_id = excluded.last_read_message_id, read_at = excluded.read_at
+                    """,
+                    (user["id"], next_id, now_ts()),
+                )
+                conn.commit()
+                return self._json(200, {"ok": True, "messageId": next_id})
 
         if self.path == "/api/message":
             data = self._read_json()
