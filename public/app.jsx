@@ -365,7 +365,7 @@ function App() {
       <section className={activeTab === 'chat' ? 'chat' : 'chat mobile-hidden'}>
         <header className="chat-head"><h2>Общий чат</h2><span className="chat-counter">{onlineUsers.length} онлайн</span></header>
         {error ? <p className="error">{error}</p> : null}
-
+        <span></span>
         <div className="messages-wrap">
           <div className="messages" ref={messagesRef} onScroll={checkScrollPosition}>
             {allMessages.map((msg) => (
@@ -408,7 +408,7 @@ function App() {
           ) : null}
 
           <div className="composer-row">
-            <button type="button" className="clip-btn" onClick={() => fileInputRef.current?.click()} aria-label="Прикрепить файл">📎</button>
+            <button type="button" className="clip-btn" onClick={() => fileInputRef.current?.click()} aria-label="Прикрепить файл">📁</button>
             <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden-file-input" onChange={handlePickFiles} />
             <textarea
               ref={textareaRef}
