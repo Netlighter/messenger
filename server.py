@@ -248,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
             mime = "text/html; charset=utf-8"
         elif file_path.suffix == ".css":
             mime = "text/css; charset=utf-8"
-        elif file_path.suffix == ".js":
+        elif file_path.suffix in {".js", ".jsx"}:
             mime = "application/javascript; charset=utf-8"
 
         self.send_response(200)
